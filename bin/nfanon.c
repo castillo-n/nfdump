@@ -1,32 +1,40 @@
 /*
- *  Copyright (c) 2009-2020, Peter Haag
+ *  Copyright (c) 2014, Peter Haag
+ *  Copyright (c) 2009, Peter Haag
  *  Copyright (c) 2004-2008, SWITCH - Teleinformatikdienste fuer Lehre und Forschung
  *  All rights reserved.
- *  
- *  Redistribution and use in source and binary forms, with or without 
+ *
+ *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions are met:
- *  
- *   * Redistributions of source code must retain the above copyright notice, 
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
  *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright notice, 
- *     this list of conditions and the following disclaimer in the documentation 
+ *   * Redistributions in binary form must reproduce the above copyright notice,
+ *     this list of conditions and the following disclaimer in the documentation
  *     and/or other materials provided with the distribution.
- *   * Neither the name of the author nor the names of its contributors may be 
- *     used to endorse or promote products derived from this software without 
+ *   * Neither the name of the author nor the names of its contributors may be
+ *     used to endorse or promote products derived from this software without
  *     specific prior written permission.
- *  
- *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
- *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
- *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
- *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
- *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
- *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
- *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
- *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
- *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
- *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
- *  
+ *
+ *  $Author: haag $
+ *
+ *  $Id:$
+ *
+ *  $LastChangedRevision: 48 $
+ *
+ *
  */
 
 #include "config.h"
@@ -46,18 +54,29 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-
-#ifdef HAVE_STDINT_H
+#include <stdbool.h>
+#include <string.h>
 #include <stdint.h>
-#endif
+#include <inttypes.h>
+#include <sys/types.h>
+#include <stdint.h>
 
-#include "util.h"
-#include "nfdump.h"
+
+//#ifdef HAVE_STDINT_H
+//#include <stdint.h>
+//#endif
+
 #include "nffile.h"
 #include "nfx.h"
-#include "exporter.h"
+#include "util.h"
 #include "flist.h"
 #include "panonymizer.h"
+
+#if ( SIZEOF_VOID_P == 8 )
+typedef uint64_t    pointer_addr_t;
+#else
+typedef uint32_t    pointer_addr_t;
+#endif
 
 // module limited globals
 extension_map_list_t *extension_map_list;
@@ -69,6 +88,8 @@ static inline void AnonRecord(master_record_t *master_record);
 
 static void process_data(void *wfile);
 
+static int isNotACustomer(uint32_t string);
+
 /* Functions */
 
 #define NEED_PACKRECORD 1
@@ -78,7 +99,7 @@ static void process_data(void *wfile);
 static void usage(char *name) {
 		printf("usage %s [options] \n"
 					"-h\t\tthis text you see right here\n"
-					"-K <key>\tAnonymize IP addresses using CryptoPAn with key <key>.\n"
+					"-K <key>\tAnonymize IP addressses using CryptoPAn with key <key>.\n"
 					"-r\t\tread input from file\n"
 					"-M <expr>\tRead input from multiple directories.\n"
 					"-R <expr>\tRead input from sequence of files.\n"
@@ -86,6 +107,20 @@ static void usage(char *name) {
 					, name);
 } /* usage */
 
+static int isNotACustomer(uint32_t ipAddress){
+    const int NBYTES = 4;
+    uint8_t octet[NBYTES];
+    char ipAddressFinal[16];
+    bool it_is_a_customer = 0; //return false if it is a customer
+    bool not_a_customer = 1; //return true if it isnt a customer
+    for(int i = 0 ; i < NBYTES ; i++)
+    {
+        octet[i] = ipAddress >> (i * 8);
+    }
+// sprintf(ipAddressFinal, "%d.%d.%d.%d", octet[3], octet[2], octet[1], octet[0]);
+// check if ip is under range 190.0.X.X then return is a customer otherwise return not a customer
+    return it_is_a_customer;
+}
 static inline void AnonRecord(master_record_t *master_record) {
 extension_map_t *extension_map = master_record->map_ref;
 int		i;
@@ -94,18 +129,30 @@ int		i;
 	if ( (master_record->flags & FLAG_IPV6_ADDR) != 0 )	{ // IPv6
 		// IPv6
 		uint64_t    anon_ip[2];
-		anonymize_v6(master_record->V6.srcaddr, anon_ip);
-		master_record->V6.srcaddr[0] = anon_ip[0];
-		master_record->V6.srcaddr[1] = anon_ip[1];
-    
-		anonymize_v6(master_record->V6.dstaddr, anon_ip);
-		master_record->V6.dstaddr[0] = anon_ip[0];
-		master_record->V6.dstaddr[1] = anon_ip[1];
+		anonymize_v6(master_record->v6.srcaddr, anon_ip);
+		master_record->v6.srcaddr[0] = anon_ip[0];
+		master_record->v6.srcaddr[1] = anon_ip[1];
 
-	} else { 	
+		anonymize_v6(master_record->v6.dstaddr, anon_ip);
+		master_record->v6.dstaddr[0] = anon_ip[0];
+		master_record->v6.dstaddr[1] = anon_ip[1];
+
+	} else {
 		// IPv4
-		master_record->V4.srcaddr = anonymize(master_record->V4.srcaddr);
-		master_record->V4.dstaddr = anonymize(master_record->V4.dstaddr);
+		if(isNotACustomer(master_record->v4.dstaddr) == 1){
+		    // address is from one of our customers
+//		    printf("IT WORKED, is not  our customer\n");
+		    master_record->v4.dstaddr = master_record->v4.dstaddr;
+		}else{
+		    master_record->v4.dstaddr = anonymize(master_record->v4.dstaddr);
+		}
+		if(isNotACustomer(master_record->v4.srcaddr) == 1){
+		    // address is from one of our customers
+//		    printf("IT WORKED, is not our customer\n");
+		    master_record->v4.srcaddr = master_record->v4.srcaddr;
+		}else{
+		    master_record->v4.srcaddr = anonymize(master_record->v4.srcaddr);
+		}
 	}
 
 	// Process optional extensions
@@ -121,45 +168,45 @@ int		i;
 				master_record->dstas = 0;
 				break;
 			case EX_NEXT_HOP_v4:
-				master_record->ip_nexthop.V4 = anonymize(master_record->ip_nexthop.V4);
+				master_record->ip_nexthop.v4 = anonymize(master_record->ip_nexthop.v4);
 				break;
 			case EX_NEXT_HOP_v6: {
 				uint64_t    anon_ip[2];
-				anonymize_v6(master_record->ip_nexthop.V6, anon_ip);
-				master_record->ip_nexthop.V6[0] = anon_ip[0];
-				master_record->ip_nexthop.V6[1] = anon_ip[1];
+				anonymize_v6(master_record->ip_nexthop.v6, anon_ip);
+				master_record->ip_nexthop.v6[0] = anon_ip[0];
+				master_record->ip_nexthop.v6[1] = anon_ip[1];
 				} break;
-			case EX_NEXT_HOP_BGP_v4: 
-				master_record->bgp_nexthop.V4 = anonymize(master_record->bgp_nexthop.V4);
+			case EX_NEXT_HOP_BGP_v4:
+				master_record->bgp_nexthop.v4 = anonymize(master_record->bgp_nexthop.v4);
 				break;
 			case EX_NEXT_HOP_BGP_v6: {
 				uint64_t    anon_ip[2];
-				anonymize_v6(master_record->bgp_nexthop.V6, anon_ip);
-				master_record->bgp_nexthop.V6[0] = anon_ip[0];
-				master_record->bgp_nexthop.V6[1] = anon_ip[1];
+				anonymize_v6(master_record->bgp_nexthop.v6, anon_ip);
+				master_record->bgp_nexthop.v6[0] = anon_ip[0];
+				master_record->bgp_nexthop.v6[1] = anon_ip[1];
 				} break;
 			case EX_ROUTER_IP_v4:
-				master_record->ip_router.V4 = anonymize(master_record->ip_router.V4);
+				master_record->ip_router.v4 = anonymize(master_record->ip_router.v4);
 				break;
 			case EX_ROUTER_IP_v6: {
 				uint64_t    anon_ip[2];
-				anonymize_v6(master_record->ip_router.V6, anon_ip);
-				master_record->ip_router.V6[0] = anon_ip[0];
-				master_record->ip_router.V6[1] = anon_ip[1];
+				anonymize_v6(master_record->ip_router.v6, anon_ip);
+				master_record->ip_router.v6[0] = anon_ip[0];
+				master_record->ip_router.v6[1] = anon_ip[1];
 				} break;
 #ifdef NSEL
 			case EX_NSEL_XLATE_IP_v4:
-				master_record->xlate_src_ip.V4 = anonymize(master_record->xlate_src_ip.V4);
-				master_record->xlate_dst_ip.V4 = anonymize(master_record->xlate_dst_ip.V4);
+				master_record->xlate_src_ip.v4 = anonymize(master_record->xlate_src_ip.v4);
+				master_record->xlate_dst_ip.v4 = anonymize(master_record->xlate_dst_ip.v4);
 				break;
 			case EX_NSEL_XLATE_IP_v6: {
 				uint64_t    anon_ip[2];
-				anonymize_v6(master_record->xlate_src_ip.V6, anon_ip);
-				master_record->xlate_src_ip.V6[0] = anon_ip[0];
-				master_record->xlate_src_ip.V6[1] = anon_ip[1];
-				anonymize_v6(master_record->xlate_dst_ip.V6, anon_ip);
-				master_record->xlate_dst_ip.V6[0] = anon_ip[0];
-				master_record->xlate_dst_ip.V6[1] = anon_ip[1];
+				anonymize_v6(master_record->xlate_src_ip.v6, anon_ip);
+				master_record->xlate_src_ip.v6[0] = anon_ip[0];
+				master_record->xlate_src_ip.v6[1] = anon_ip[1];
+				anonymize_v6(master_record->xlate_dst_ip.v6, anon_ip);
+				master_record->xlate_dst_ip.v6[0] = anon_ip[0];
+				master_record->xlate_dst_ip.v6[1] = anon_ip[1];
 				} break;
 #endif
 		}
@@ -175,6 +222,10 @@ nffile_t			*nffile_r;
 nffile_t			*nffile_w;
 int 		i, done, ret, cnt, verbose;
 char		outfile[MAXPATHLEN], *cfile;
+#ifdef COMPAT15
+int	v1_map_done = 0;
+#endif
+
 
 	setbuf(stderr, NULL);
 	cnt 	= 1;
@@ -210,9 +261,9 @@ char		outfile[MAXPATHLEN], *cfile;
 	}
 
 	if ( wfile )
-		nffile_w = OpenNewFile(wfile, NULL, FILE_COMPRESSION(nffile_r), 1, NULL);
+		nffile_w = OpenNewFile(wfile, NULL, FILE_IS_COMPRESSED(nffile_r), 1, NULL);
 	else
-		nffile_w = OpenNewFile(outfile, NULL, FILE_COMPRESSION(nffile_r), 1, NULL);
+		nffile_w = OpenNewFile(outfile, NULL, FILE_IS_COMPRESSED(nffile_r), 1, NULL);
 
 	if ( !nffile_w ) {
 		if ( nffile_r ) {
@@ -232,9 +283,9 @@ char		outfile[MAXPATHLEN], *cfile;
 		switch (ret) {
 			case NF_CORRUPT:
 			case NF_ERROR:
-				if ( ret == NF_CORRUPT ) 
+				if ( ret == NF_CORRUPT )
 					LogError("Skip corrupt data file '%s'\n",GetCurrentFilename());
-				else 
+				else
 					LogError("Read error in file '%s': %s\n",GetCurrentFilename(), strerror(errno) );
 				// fall through - get next file in chain
 			case NF_EOF: {
@@ -242,7 +293,7 @@ char		outfile[MAXPATHLEN], *cfile;
     			if ( nffile_w->block_header->NumRecords ) {
         			if ( WriteBlock(nffile_w) <= 0 ) {
             			LogError("Failed to write output buffer to disk: '%s'" , strerror(errno));
-        			} 
+        			}
     			}
 				if ( wfile == NULL ) {
 					CloseUpdateFile(nffile_w, nffile_r->file_header->ident);
@@ -275,7 +326,7 @@ char		outfile[MAXPATHLEN], *cfile;
 					snprintf(outfile,MAXPATHLEN-1, "%s-tmp", cfile);
 					outfile[MAXPATHLEN-1] = '\0';
 
-					nffile_w = OpenNewFile(outfile, nffile_w, FILE_COMPRESSION(nffile_r), 1, NULL);
+					nffile_w = OpenNewFile(outfile, nffile_w, FILE_IS_COMPRESSED(nffile_r), 1, NULL);
 					if ( !nffile_w ) {
 						if ( nffile_r ) {
 							CloseFile(nffile_r);
@@ -283,15 +334,54 @@ char		outfile[MAXPATHLEN], *cfile;
 						}
 						return;
 					}
-					memcpy((void *)nffile_w->stat_record, (void *)nffile_r->stat_record, sizeof(stat_record_t));
+					memcpy((void *)nffile_w->stat_record, (void *)&nffile_r->stat_record, sizeof(stat_record_t));
 				} else {
 					SumStatRecords(nffile_w->stat_record, nffile_r->stat_record);
 				}
 
 				// continue with next file
 				continue;
-	
+
 				} break; // not really needed
+		}
+
+#ifdef COMPAT15
+		if ( nffile_r->block_header->id == DATA_BLOCK_TYPE_1 ) {
+			common_record_v1_t *v1_record = (common_record_v1_t *)nffile_r->buff_ptr;
+			// create an extension map for v1 blocks
+			if ( v1_map_done == 0 ) {
+				extension_map_t *map = malloc(sizeof(extension_map_t) + 2 * sizeof(uint16_t) );
+				if ( ! map ) {
+					LogError("malloc() error in %s line %d: %s\n", __FILE__, __LINE__, strerror(errno) );
+					exit(255);
+				}
+				map->type 	= ExtensionMapType;
+				map->size 	= sizeof(extension_map_t) + 2 * sizeof(uint16_t);
+				map->map_id = 0;
+				map->ex_id[0]  = EX_IO_SNMP_2;
+				map->ex_id[1]  = EX_AS_2;
+				map->ex_id[2]  = 0;
+
+				Insert_Extension_Map(extension_map_list, map);
+				AppendToBuffer(nffile_w, (void *)map, map->size);
+
+				v1_map_done = 1;
+			}
+
+			// convert the records to v2
+			for ( i=0; i < nffile_r->block_header->NumRecords; i++ ) {
+				common_record_t *v2_record = (common_record_t *)v1_record;
+				Convert_v1_to_v2((void *)v1_record);
+				// now we have a v2 record -> use size of v2_record->size
+				v1_record = (common_record_v1_t *)((pointer_addr_t)v1_record + v2_record->size);
+			}
+			nffile_r->block_header->id = DATA_BLOCK_TYPE_2;
+		}
+#endif
+
+		if ( nffile_r->block_header->id == Large_BLOCK_Type ) {
+			// skip
+			continue;
 		}
 
 		if ( nffile_r->block_header->id != DATA_BLOCK_TYPE_2 ) {
@@ -300,25 +390,19 @@ char		outfile[MAXPATHLEN], *cfile;
 		}
 
 		flow_record = nffile_r->buff_ptr;
-		uint32_t sumSize = 0;
 		for ( i=0; i < nffile_r->block_header->NumRecords; i++ ) {
-			if ( (sumSize + flow_record->size) > ret ) {
-				LogError("Corrupt data file. Inconsistent block size in %s line %d\n", __FILE__, __LINE__);
-				exit(255);
-			}
-			sumSize += flow_record->size;
-
-			switch ( flow_record->type ) { 
+			switch ( flow_record->type ) {
+				case CommonRecordV0Type:
 				case CommonRecordType: {
 					uint32_t map_id = flow_record->ext_map;
 					if ( extension_map_list->slot[map_id] == NULL ) {
 						LogError("Corrupt data file! No such extension map id: %u. Skip record", flow_record->ext_map );
 					} else {
 						ExpandRecord_v2( flow_record, extension_map_list->slot[flow_record->ext_map], NULL, &master_record);
-	
+
 						// update number of flows matching a given map
 						extension_map_list->slot[map_id]->ref_count++;
-			
+
 						AnonRecord(&master_record);
 						PackRecord(&master_record, nffile_w);
 					}
@@ -327,20 +411,14 @@ char		outfile[MAXPATHLEN], *cfile;
 				case ExtensionMapType: {
 					extension_map_t *map = (extension_map_t *)flow_record;
 
-					int ret = Insert_Extension_Map(extension_map_list, map);
-					switch (ret) {
-						case 0:
-							break; // map already known and flushed
-						case 1:
-							AppendToBuffer(nffile_w, (void *)map, map->size);
-							break;
-						default:
-							LogError("Corrupt data file. Unable to decode at %s line %d\n", __FILE__, __LINE__);
-							exit(255);
-					}
-					} break; 
-				case LegacyRecordType1:
-				case LegacyRecordType2:
+					if ( Insert_Extension_Map(extension_map_list, map) ) {
+					 	// flush new map
+					} // else map already known and flushed
+					AppendToBuffer(nffile_w, (void *)map, map->size);
+
+					} break;
+				case ExporterRecordType:
+				case SamplerRecordype:
 				case ExporterInfoRecordType:
 				case ExporterStatRecordType:
 				case SamplerInfoRecordype:
@@ -352,7 +430,7 @@ char		outfile[MAXPATHLEN], *cfile;
 				}
 			}
 			// Advance pointer by number of bytes for netflow record
-			flow_record = (common_record_t *)((pointer_addr_t)flow_record + flow_record->size);	
+			flow_record = (common_record_t *)((pointer_addr_t)flow_record + flow_record->size);
 
 		} // for all records
 
@@ -396,7 +474,7 @@ char		CryptoPAnKey[32];
 				PAnonymizer_Init((uint8_t *)CryptoPAnKey);
 				break;
 			case 'L':
-				if ( !InitLog(0, "argv[0]", optarg, 0) )
+				if ( !InitLog("argv[0]", optarg) )
 					exit(255);
 				break;
 			case 'r':
